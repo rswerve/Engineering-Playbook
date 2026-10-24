@@ -1,5 +1,5 @@
-# to install
-# nix-env -p /nix/var/nix/profiles/eng-playbook -f nix -i
+# to install into the project profile that NIX_PROFILE names (see nix/update.sh)
+# nix-env -p "$NIX_PROFILE" -f nix -i
 #
 # use
 #
@@ -27,12 +27,12 @@ buildEnv {
     (import
       (builtins.fetchGit {
         # Descriptive name to make the store path easier to identify
-        name = "nodejs-16.16.0";
+        name = "nodejs-22.23.4";
         url = "https://github.com/NixOS/nixpkgs/";
-        ref = "refs/heads/nixpkgs-unstable";
-        rev = "6c6409e965a6c883677be7b9d87a95fab6c3472e";
+        ref = "refs/heads/master";
+        rev = "1a9d46887bff0b14383eaec8cd0fa87c7c4baae0";
       })
-      { }).nodejs-16_x
+      { }).nodejs_22
 
     (import
       (builtins.fetchGit {
@@ -47,10 +47,10 @@ buildEnv {
     (import
       (builtins.fetchGit {
         # Descriptive name to make the store path easier to identify
-        name = "pre-commit-2.14.0";
+        name = "pre-commit-4.7.0";
         url = "https://github.com/NixOS/nixpkgs/";
-        ref = "refs/heads/nixpkgs-unstable";
-        rev = "9c3de9dd586506a7694fc9f19d459ad381239e34";
+        ref = "refs/heads/master";
+        rev = "1a9d46887bff0b14383eaec8cd0fa87c7c4baae0";
       })
       { }).pre-commit
   ];
