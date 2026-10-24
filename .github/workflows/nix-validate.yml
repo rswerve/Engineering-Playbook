@@ -1,0 +1,253 @@
+# Validates the Nix route in nix/default.nix on disposable runners.
+# Commit only on a fork validation branch and dispatch by hand; not part of the PR.
+name: Nix route validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full 40-character commit SHA of the reviewed source to validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  nix-route:
+    strategy:
+      # Each platform's failures must show even when the other platform fails.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    # The selected nixpkgs master revision may not be fully in cache.nixos.org,
+    # so Node 22, pre-commit and parts of their closures can need a local build.
+    timeout-minutes: 300
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      NIX_VERSION: 2.35.4
+      # sha256 of https://releases.nixos.org/nix/nix-2.35.4/install, which in turn
+      # checks the sha256 of the binary tarball it downloads for the runner's platform.
+      NIX_INSTALL_SHA256: 118c3dfa04bdc946b3f577365b9a295607142c9b920e2c07b184e266d62b1ee1
+      # nixpkgs-unstable head observed 2026-10-20; the channel the official
+      # installer subscribes a developer to by default, so the likeliest
+      # ambient <nixpkgs> for nix/default.nix's outer buildEnv.
+      OUTER_NIXPKGS_REV: 5adc50831c259f87faeb09ddf930d43597197473
+      EXPECTED_NODE: v22.23.4
+      EXPECTED_URL: https://nodejs.org/dist/v22.23.4/node-v22.23.4.tar.xz
+      EXPECTED_HASH: 7b9adc82d612d0a2a863d96c46de2292552e250cee51956ebbe0146c42aacae9
+      EXPECTED_PRE_COMMIT: pre-commit 4.7.0
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Require a full source commit SHA
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+            { echo "::error::source_sha must be a full 40-character lowercase commit SHA"; exit 1; }
+          echo "source to validate: $SOURCE_SHA (workflow ref ${GITHUB_REF}, workflow sha ${GITHUB_SHA})"
+
+      - name: Check out the source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+          path: repo
+          persist-credentials: false
+
+      - name: Check that the checkout is exactly the source commit
+        run: |
+          head=$(git -C repo rev-parse HEAD)
+          echo "checked-out HEAD: $head"
+          [ "$head" = "$SOURCE_SHA" ] ||
+            { echo "::error::checked-out HEAD $head is not source_sha $SOURCE_SHA"; exit 1; }
+
+      # Multi-user is the only mode the installer supports on macOS, and the one the
+      # README gives Linux with systemd and without SELinux, which these runners are.
+      - name: Install Nix (official installer, multi-user, no channel)
+        run: |
+          uname -a
+          if [ "$RUNNER_OS" = macOS ]; then sw_vers; fi
+          installer="$RUNNER_TEMP/nix-install"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            -o "$installer" "https://releases.nixos.org/nix/nix-${NIX_VERSION}/install"
+          actual=$(shasum -a 256 "$installer" | cut -d ' ' -f 1)
+          [ "$actual" = "$NIX_INSTALL_SHA256" ] ||
+            { echo "::error::installer sha256 $actual, expected $NIX_INSTALL_SHA256"; exit 1; }
+          sh "$installer" --daemon --yes --no-channel-add
+          # Steps do not start login shells, so carry over what the installed
+          # shell hook gives a developer's new terminal.
+          . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
+          echo "NIX_SSL_CERT_FILE=${NIX_SSL_CERT_FILE:?}" | tee -a "$GITHUB_ENV"
+          echo "/nix/var/nix/profiles/default/bin" >> "$GITHUB_PATH"
+
+      - name: 1. Nix version (requires 2.18 or later)
+        run: |
+          nix-instantiate --version
+          ok=$(nix-instantiate --eval --json --expr 'builtins.compareVersions builtins.nixVersion "2.18" >= 0')
+          [ "$ok" = true ] || { echo "::error::Nix is older than 2.18"; exit 1; }
+          nix-instantiate --eval --expr 'builtins.currentSystem'
+          echo "NIX_PATH='${NIX_PATH:-}' (expected empty: no channel, so <nixpkgs> resolves only through -I)"
+
+      - name: Write the exact package expression
+        run: |
+          cat > "$RUNNER_TEMP/node22.nix" <<'EOF'
+          let
+            source = builtins.fetchGit {
+              url = "https://github.com/NixOS/nixpkgs/";
+              ref = "refs/heads/master";
+              rev = "1a9d46887bff0b14383eaec8cd0fa87c7c4baae0";
+            };
+          in
+          (import source { }).nodejs_22
+          EOF
+          cat "$RUNNER_TEMP/node22.nix"
+
+      - name: 2. Evaluate the package's version, source URL and hash
+        run: |
+          nix-instantiate --eval --strict --json --expr "
+            let package = import $RUNNER_TEMP/node22.nix; in {
+              version = package.version;
+              sourceURLs = package.src.urls;
+              sourceHashAlgo = package.src.outputHashAlgo;
+              sourceHash = package.src.outputHash;
+            }" | tee "$RUNNER_TEMP/node22-eval.json"
+          echo
+          jq -e --arg url "$EXPECTED_URL" --arg hash "$EXPECTED_HASH" '
+            .version == "22.23.4"
+            and .sourceURLs == [$url]
+            and .sourceHashAlgo == "sha256"
+            and .sourceHash == $hash' "$RUNNER_TEMP/node22-eval.json"
+
+      - name: 3. Build the package and run its node and npm
+        id: node
+        run: |
+          out=$(nix-build --no-out-link "$RUNNER_TEMP/node22.nix")
+          echo "store path: $out"
+          node_version=$("$out/bin/node" --version)
+          echo "node: $node_version"
+          "$out/bin/npm" --version
+          [ "$node_version" = "$EXPECTED_NODE" ] || { echo "::error::expected $EXPECTED_NODE"; exit 1; }
+          "$out/bin/node" -p 'process.versions'
+          if [ "$RUNNER_OS" = macOS ]; then
+            otool -L "$(readlink -f "$out/bin/node")"
+          else
+            ldd "$(readlink -f "$out/bin/node")"
+          fi
+          # nixpkgs builds Node with --openssl-use-def-ca-store, so trust comes from
+          # OpenSSL's default store and its environment, not Node's bundled roots.
+          "$out/bin/node" -p '
+            const tls = require("tls");
+            const v = process.config.variables;
+            const count = (type) =>
+              typeof tls.getCACertificates === "function" ? tls.getCACertificates(type).length : "unavailable";
+            JSON.stringify({
+              node_shared_openssl: v.node_shared_openssl ?? null,
+              // --openssl-use-def-ca-store appears here as NODE_OPENSSL_CERT_STORE.
+              build_defines: process.config.target_defaults?.defines ?? null,
+              SSL_CERT_FILE: process.env.SSL_CERT_FILE ?? null,
+              SSL_CERT_DIR: process.env.SSL_CERT_DIR ?? null,
+              NIX_SSL_CERT_FILE: process.env.NIX_SSL_CERT_FILE ?? null,
+              NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS ?? null,
+              default_ca_count: count("default"),
+              bundled_ca_count: count("bundled"),
+            }, null, 2)'
+          echo "out=$out" >> "$GITHUB_OUTPUT"
+
+      - name: 4. Build the full nix/default.nix with an explicit outer nixpkgs
+        id: env
+        working-directory: repo
+        run: |
+          env_out=$(nix-build --no-out-link \
+            -I "nixpkgs=https://github.com/NixOS/nixpkgs/archive/${OUTER_NIXPKGS_REV}.tar.gz" \
+            ./nix)
+          echo "environment: $env_out"
+          ls -l "$env_out/bin"
+          for name in node npm bash pre-commit circleci-cli circleci; do
+            [ -x "$env_out/bin/$name" ] || { echo "::error::missing $name"; exit 1; }
+          done
+          node_version=$("$env_out/bin/node" --version)
+          echo "node: $node_version"
+          [ "$node_version" = "$EXPECTED_NODE" ] || { echo "::error::expected $EXPECTED_NODE"; exit 1; }
+          [ "$(readlink -f "$env_out/bin/node")" = "$(readlink -f "${{ steps.node.outputs.out }}/bin/node")" ] ||
+            { echo "::error::environment node is not the step 3 package"; exit 1; }
+          "$env_out/bin/npm" --version
+          "$env_out/bin/bash" --version
+          pre_commit_version=$("$env_out/bin/pre-commit" --version)
+          echo "$pre_commit_version"
+          [ "$pre_commit_version" = "$EXPECTED_PRE_COMMIT" ] ||
+            { echo "::error::expected $EXPECTED_PRE_COMMIT"; exit 1; }
+          echo "$env_out/bin" >> "$GITHUB_PATH"
+          echo "out=$env_out" >> "$GITHUB_OUTPUT"
+          mkdir -p "$GITHUB_WORKSPACE/cache/npm" "$GITHUB_WORKSPACE/cache/pre-commit"
+          echo "npm_config_cache=$GITHUB_WORKSPACE/cache/npm" >> "$GITHUB_ENV"
+          echo "PRE_COMMIT_HOME=$GITHUB_WORKSPACE/cache/pre-commit" >> "$GITHUB_ENV"
+
+      - name: 5a. Check that the environment comes first on PATH
+        id: path
+        run: |
+          for name in node npm pre-commit; do
+            echo "$name -> $(command -v "$name")"
+            [ "$(command -v "$name")" = "${{ steps.env.outputs.out }}/bin/$name" ] ||
+              { echo "::error::$name does not resolve to the Nix environment"; exit 1; }
+          done
+
+      - name: 5b. npm install
+        working-directory: repo
+        run: |
+          npm_cli=$(readlink -f "$(command -v npm)")
+          echo "npm script: $npm_cli, shebang: $(head -n 1 "$npm_cli")"
+          npm exec -c 'node -p process.execPath'
+          npm exec -c 'node --version'
+          npm install
+
+      - name: 5c. npm run build
+        working-directory: repo
+        run: |
+          echo "docusaurus script: $(head -n 1 node_modules/.bin/docusaurus)"
+          npm exec -c 'node -p process.execPath'
+          npm exec -c 'node --version'
+          npm run build
+
+      - name: 5d. pre-commit run --all-files
+        if: ${{ !cancelled() && steps.path.outcome == 'success' }}
+        working-directory: repo
+        run: pre-commit run --all-files --show-diff-on-failure
+
+      - name: 5e. Show the node the pre-commit node hook used
+        if: ${{ !cancelled() && steps.path.outcome == 'success' }}
+        run: |
+          found=0
+          for node_bin in "$PRE_COMMIT_HOME"/repo*/node_env-*/bin/node; do
+            [ -e "$node_bin" ] || continue
+            found=1
+            echo "$node_bin -> $(readlink -f "$node_bin") $("$node_bin" --version)"
+          done
+          [ "$found" = 1 ] || { echo "::error::no pre-commit node environment was created"; exit 1; }
+
+      # The README's install step. direnv and .envrc are not used: NIX_PROFILE is a
+      # new profile the runner user can write, and <nixpkgs> is the pinned outer one.
+      - name: 6. nix/update.sh installs into a writable project profile
+        if: ${{ !cancelled() && steps.env.outcome == 'success' }}
+        working-directory: repo
+        env:
+          NIX_PROFILE: ${{ runner.temp }}/eng-playbook-profiles/eng-playbook
+        run: |
+          mkdir -p "$(dirname "$NIX_PROFILE")"
+          [ ! -e "$NIX_PROFILE" ] || { echo "::error::$NIX_PROFILE already exists"; exit 1; }
+          [ ! -e .nix-hash ] || { echo "::error::.nix-hash exists before nix/update.sh ran"; exit 1; }
+          NIX_PATH="nixpkgs=https://github.com/NixOS/nixpkgs/archive/${OUTER_NIXPKGS_REV}.tar.gz" nix/update.sh
+          ls -l "$(dirname "$NIX_PROFILE")" "$NIX_PROFILE/bin/"
+          node_version=$("$NIX_PROFILE/bin/node" --version)
+          echo "profile node: $node_version"
+          [ "$node_version" = "$EXPECTED_NODE" ] ||
+            { echo "::error::profile node is $node_version, expected $EXPECTED_NODE"; exit 1; }
+          pre_commit_version=$("$NIX_PROFILE/bin/pre-commit" --version)
+          echo "profile $pre_commit_version"
+          [ "$pre_commit_version" = "$EXPECTED_PRE_COMMIT" ] ||
+            { echo "::error::profile has $pre_commit_version, expected $EXPECTED_PRE_COMMIT"; exit 1; }
+          [ -s .nix-hash ] || { echo "::error::nix/update.sh did not write .nix-hash"; exit 1; }
+          expected_hash="$(nix-hash "$PWD/nix")-$(nix-store -q --hash "$NIX_PROFILE")"
+          echo ".nix-hash: $(cat .nix-hash) (expected $expected_hash)"
+          [ "$(cat .nix-hash)" = "$expected_hash" ] ||
+            { echo "::error::.nix-hash does not match the nix/ directory and the new profile"; exit 1; }
