@@ -22,7 +22,7 @@ At it's core decision making process is as follows:
 1. Workshop the ADR with a [Domain Group](#domain-groups)
    and create a final draft.
 1. Propose it in Slack for all of AppEng for review.
-1. (Optional) Hold a [meeting](#review-meeting) for review.
+1. (Optional) Hold a [meeting](#review-meetings) for review.
 1. Commit the [ADR](./adrs) and create [implementation documentation](#output).
 
 ## Writing an ADR

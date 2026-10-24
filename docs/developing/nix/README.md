@@ -177,7 +177,7 @@ packages needed for `nix` itself to work properly.
 
 If you want, you could tell it to use a different profile. Either on a
 one-off command or by switching the active profile. This is covered
-more in the [Profiles: Advanced section](#profiles:-advanced).
+more in the [Profiles: Advanced section](#profiles-advanced).
 
 Default profile is in: `/nix/var/nix/profiles/per-user/<username>/profile/`
 E.g. `/nix/var/nix/profiles/per-user/felipe/profile/`
