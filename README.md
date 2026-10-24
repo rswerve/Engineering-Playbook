@@ -104,6 +104,10 @@ once the Command Line Tools are installed, and run the setup script above again.
 
 #### With Nix
 
+This route needs Nix 2.18 or later. It installs Node 22.23.4, while nodenv and
+CI use Node 24.22.1 from `.node-version`. It has not been verified whether the
+Nix Node package's shared libraries and the certificate store it uses are fixed.
+
 1. Install or update Homebrew using the same script as in the previous section,
    but without running the `*.local` scripts:
 
@@ -119,17 +123,31 @@ export SKIP_LOCAL=true
 bash (curl -s https://raw.githubusercontent.com/trussworks/fresh-brew/main/fresh-press | psub)
 ```
 
-1. Install Nix if you don't already have it:
+1. Install Nix if you don't already have it. On macOS, and on Linux with
+   systemd and without SELinux, use the multi-user install. It asks for your
+   `sudo` password:
 
-```
-sh <(curl -L https://nixos.org/nix/install) --darwin-use-unencrypted-nix-store-volume --no-daemon
+```shell
+curl -L https://nixos.org/nix/install | sh -s -- --daemon
 ```
 
-Note: if you're using the Fish shell, you'll need to [complete an extra step](https://github.com/trussworks/Engineering-Playbook/tree/main/developing/nix#extra-setup-only-fish-shell-users).
+On other Linux systems, use the single-user install:
+
+```shell
+curl -L https://nixos.org/nix/install | sh -s -- --no-daemon
+```
+
+Note: if you're using the Fish shell with the single-user install, you'll need to [complete an extra step](https://github.com/trussworks/Engineering-Playbook/tree/main/developing/nix#extra-setup-only-fish-shell-users).
 
 1. Quit and restart your terminal
 1. Run `direnv allow`
 1. Run `nix/update.sh`
+
+`nix/update.sh` installs into the profile that `NIX_PROFILE` names, which
+`.envrc` sets. That `.envrc` setup has not been verified with the current Nix
+installers. Maintainers: before running `nix/update.sh`, confirm that
+`NIX_PROFILE` names a project profile you can write. With a multi-user
+install, only root can create entries directly in `/nix/var/nix/profiles`.
 
 ### Run the server
 

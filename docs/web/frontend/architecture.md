@@ -41,7 +41,7 @@ This is a suggested directory structure for your frontend application. It's not 
 
 - `/src/pages` - **React components** that correspond to actual routes (URLs). These are responsible for assembling the UI components for a page, and hooking them up with the necessary providers such as Redux or GraphQL. Queries should be co-located with page components, since pages are explicitly dependent on them.
 
-- `/src/store` - Redux or other application state management code is in here! For more info on whether to use Redux or GraphQL, [read here](#to-redux-or-graphql).
+- `/src/store` - Redux or other application state management code is in here! For more info on whether to use Redux or GraphQL, [read here](#application-state--data-management).
 
   - `/src/store/store.ts` - Configures and exports the Redux store
   - Directories in here correspond to reducers, or "slices" of the store. Each directory contains its own types, actions, and reducer. These should all be well-tested.

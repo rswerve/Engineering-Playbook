@@ -11,16 +11,13 @@ need to set up your own.
 
 <!-- toc -->
 
-- [Project Bootstrap Guide](#project-bootstrap-guide)
-  - [GitHub and Git Repos](#github-and-git-repos)
-  - [1Password](#1password)
-  - [AWS Organization and Accounts](#aws-organization-and-accounts)
-    - [GovCloud](#govcloud)
-    - [Atlantis](#atlantis)
-    - [Placeholder service modules](#placeholder-service-modules)
-  - [CI/CD Pipeline](#cicd-pipeline)
-
-<!-- Regenerate with "pre-commit run -a markdown-toc" -->
+- [GitHub and Git Repos](#github-and-git-repos)
+- [1Password](#1password)
+- [AWS Organization and Accounts](#aws-organization-and-accounts)
+  - [GovCloud](#govcloud)
+  - [Atlantis](#atlantis)
+  - [Placeholder service modules](#placeholder-service-modules)
+- [CI/CD Pipeline](#cicd-pipeline)
 
 <!-- tocstop -->
 
